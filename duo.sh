@@ -246,7 +246,7 @@ function duo-check-monitor() {
             echo "$(date) - MONITOR - Turning off Bluetooth"
             rfkill block bluetooth
         fi
-        if ((${MONITOR_COUNT} > 1)); then
+        if (( MONITOR_COUNT > 1 )) || (( MONITOR_COUNT == 0 )); then
             echo "$(date) - MONITOR - Disabling bottom monitor"
             gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1
             NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
@@ -265,11 +265,11 @@ function duo-check-monitor() {
         fi
         echo "$(date) - MONITOR - Turning on Bluetooth"
         rfkill unblock bluetooth
-        if ((${MONITOR_COUNT} < 2)); then
+        if (( MONITOR_COUNT < 2 )); then
             echo "$(date) - MONITOR - Enabling bottom monitor"
             gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1
             NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
-            if ((${NEW_MONITOR_COUNT} == 2)); then
+            if (( NEW_MONITOR_COUNT == 2 )); then
                 MESSAGE="Enabled bottom display"
             else
                 MESSAGE="ERROR: Bottom display still off"

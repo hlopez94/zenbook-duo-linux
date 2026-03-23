@@ -66,6 +66,7 @@ Description=Zenbook Duo User Handler
 After=graphical-session.target
 
 [Service]
+ExecStartPre=/bin/sleep 3
 ExecStart=${INSTALL_LOCATION}
 Restart=no
 Environment=XDG_CURRENT_DESKTOP=GNOME
