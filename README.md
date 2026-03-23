@@ -43,3 +43,12 @@ What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 2=200%) [1-2
 ```
 
 This will set up the required systemd scripts to handle all the above functionality. A log file will be created in `/tmp/duo/` when the services are running.
+
+## Additional info
+
+### Steam audio
+
+When running systems with PipeWire, games run through Proton in Steam will often lose audio. To fix this, after boot run:
+```bash
+pw-metadata -n settings 0 clock.force-quantum 512
+```
