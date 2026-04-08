@@ -103,11 +103,15 @@ if gnome_session_active; then
         echo "Error: dconf is not available. Install dconf-cli and re-run setup.sh to apply gesture mapping." >&2
     fi
     if command -v dconf &>/dev/null; then
-        dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
-        dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
-        dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
-        dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
-        echo "Gesture and pen mapping configured: digitizer on main screen -> eDP-1, digitizer on second screen -> eDP-2."
+        if dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']" \
+            && dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']" \
+            && dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']" \
+            && dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"; then
+            echo "Gesture and pen mapping configured: digitizer on main screen -> eDP-1, digitizer on second screen -> eDP-2."
+        else
+            echo "Error: failed to write one or more GNOME dconf mappings." >&2
+            echo "Run setup.sh again in an active GNOME session, or apply keys manually with dconf write." >&2
+        fi
     fi
 else
     echo "Non-GNOME desktop detected. Skipping gesture mapping configuration."
