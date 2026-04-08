@@ -21,7 +21,8 @@ if [ "${DEV_MODE}" = false ]; then
         usbutils \
         mutter-common-bin \
         iio-sensor-proxy \
-        python3-usb
+        python3-usb \
+        dconf-cli
     sudo mkdir -p /usr/local/bin
     sudo cp ./duo.sh ${INSTALL_LOCATION}
     sudo chmod a+x ${INSTALL_LOCATION}
@@ -69,7 +70,6 @@ After=graphical-session.target
 ExecStartPre=/bin/sleep 3
 ExecStart=${INSTALL_LOCATION}
 Restart=no
-Environment=XDG_CURRENT_DESKTOP=GNOME
 
 [Install]
 WantedBy=default.target
@@ -82,13 +82,33 @@ systemctl --user daemon-reexec
 systemctl --user daemon-reload
 sudo systemctl --global enable zenbook-duo-user.service
 
-if [ "${XDG_CURRENT_DESKTOP}" = "GNOME" ] || [ "${DESKTOP_SESSION}" = "gnome" ] || command -v gnome-shell &>/dev/null; then
+# Returns 0 only when the *current session* is GNOME.
+# Checks session env vars first; falls back to a running gnome-shell process.
+# Avoids false positives from 'command -v gnome-shell', which only tests whether
+# GNOME is installed, not whether it is the active desktop session.
+gnome_session_active() {
+    # XDG_CURRENT_DESKTOP can be a colon-separated list (e.g. "ubuntu:GNOME")
+    case ":${XDG_CURRENT_DESKTOP}:" in *:GNOME:*) return 0 ;; esac
+    # XDG_SESSION_DESKTOP is set by the session manager to the session name
+    case "${XDG_SESSION_DESKTOP}" in gnome|GNOME|gnome-xorg|gnome-wayland) return 0 ;; esac
+    # Legacy / distro-specific fallback
+    case "${DESKTOP_SESSION}" in gnome|GNOME|gnome-xorg|gnome-wayland) return 0 ;; esac
+    # Last resort: a running gnome-shell process means GNOME is the active session
+    pgrep -x gnome-shell &>/dev/null
+}
+
+if gnome_session_active; then
     echo "GNOME detected. Configuring touchscreen gesture mapping..."
-    dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
-    dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
-    dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
-    dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
-    echo "Gesture and pen mapping configured: digitizer on main screen -> eDP-1, digitizer on second screen -> eDP-2."
+    if ! command -v dconf &>/dev/null; then
+        echo "Error: dconf is not available. Install dconf-cli and re-run setup.sh to apply gesture mapping." >&2
+    fi
+    if command -v dconf &>/dev/null; then
+        dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
+        dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
+        dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
+        dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
+        echo "Gesture and pen mapping configured: digitizer on main screen -> eDP-1, digitizer on second screen -> eDP-2."
+    fi
 else
     echo "Non-GNOME desktop detected. Skipping gesture mapping configuration."
 fi
