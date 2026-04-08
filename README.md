@@ -2,6 +2,9 @@
 
 A script to manage features on the Zenbook Duo.
 
+Display configuration changes are intentionally limited to the internal panels (`eDP-1` and `eDP-2`). External displays (HDMI/USB-C/DP) are preserved and are not managed by this script.
+
+
 ## Functionality Status
 
 | Feature | Working | Not Working |
@@ -15,6 +18,7 @@ A script to manage features on the Zenbook Duo.
 | Keyboard backlight set on boot and/or keyboard placed | ✅ | |
 | Checks for correct state on boot/resume (from suspend and hibernate)| ✅ | |
 | Auto rotation | ✅ | |
+| External displays remain untouched while internal Duo mode changes | ✅ | |
 | Keyboard backlight when keyboard off | | ❌ |
 | Keyboard function keys (some work in BT mode) | | ❌ |
 

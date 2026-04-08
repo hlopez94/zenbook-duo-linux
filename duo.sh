@@ -5,6 +5,10 @@ DEFAULT_BACKLIGHT=1
 
 # Default scale (1-2)
 DEFAULT_SCALE=1
+DUO_DRY_RUN=${DUO_DRY_RUN:-0}
+
+INTERNAL_TOP_MONITOR="eDP-1"
+INTERNAL_BOTTOM_MONITOR="eDP-2"
 
 # Capture Ctrl+C and close any subprocesses such as duo-watch-monitor
 trap 'echo "Ctrl+C captured. Exiting..."; pkill -P $$; exit 1' INT
@@ -139,14 +143,182 @@ if [ -n "$(lsusb | grep 'Zenbook Duo Keyboard')" ]; then
     KEYBOARD_ATTACHED=true
 fi
 MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+INTERNAL_TOP_AVAILABLE=false
+INTERNAL_BOTTOM_AVAILABLE=false
+INTERNAL_TOP_ACTIVE=false
+INTERNAL_BOTTOM_ACTIVE=false
+INTERNAL_ACTIVE_COUNT=0
+EXTERNAL_LOGICAL_MONITORS=""
+function duo-refresh-monitor-state() {
+    local GDCTL_SHOW
+    local LOGICAL_CONNECTORS
+    GDCTL_SHOW="$(gdctl show)"
+
+    MONITOR_COUNT=$(echo "${GDCTL_SHOW}" | grep 'Logical monitor #' | wc -l)
+
+    if echo "${GDCTL_SHOW}" | grep -q "Monitor ${INTERNAL_TOP_MONITOR} ("; then
+        INTERNAL_TOP_AVAILABLE=true
+    else
+        INTERNAL_TOP_AVAILABLE=false
+    fi
+
+    if echo "${GDCTL_SHOW}" | grep -q "Monitor ${INTERNAL_BOTTOM_MONITOR} ("; then
+        INTERNAL_BOTTOM_AVAILABLE=true
+    else
+        INTERNAL_BOTTOM_AVAILABLE=false
+    fi
+
+    LOGICAL_CONNECTORS=$(echo "${GDCTL_SHOW}" | awk '
+        /^Logical monitors:/ {
+            in_logical = 1
+            next
+        }
+        in_logical {
+            if ($0 ~ /\(/) {
+                line = $0
+                gsub(/[^A-Za-z0-9-]/, " ", line)
+                n = split(line, parts, /[[:space:]]+/)
+                for (i = 1; i <= n; i++) {
+                    if (parts[i] ~ /^[A-Za-z0-9]+-[A-Za-z0-9-]+$/) {
+                        print parts[i]
+                        break
+                    }
+                }
+            }
+        }
+    ')
+
+    if echo "${LOGICAL_CONNECTORS}" | grep -q "^${INTERNAL_TOP_MONITOR}$"; then
+        INTERNAL_TOP_ACTIVE=true
+    else
+        INTERNAL_TOP_ACTIVE=false
+    fi
+
+    if echo "${LOGICAL_CONNECTORS}" | grep -q "^${INTERNAL_BOTTOM_MONITOR}$"; then
+        INTERNAL_BOTTOM_ACTIVE=true
+    else
+        INTERNAL_BOTTOM_ACTIVE=false
+    fi
+
+    INTERNAL_ACTIVE_COUNT=0
+    if [ "${INTERNAL_TOP_ACTIVE}" = true ]; then
+        INTERNAL_ACTIVE_COUNT=$((INTERNAL_ACTIVE_COUNT + 1))
+    fi
+    if [ "${INTERNAL_BOTTOM_ACTIVE}" = true ]; then
+        INTERNAL_ACTIVE_COUNT=$((INTERNAL_ACTIVE_COUNT + 1))
+    fi
+
+    EXTERNAL_LOGICAL_MONITORS=$(echo "${GDCTL_SHOW}" | awk -v top="${INTERNAL_TOP_MONITOR}" -v bottom="${INTERNAL_BOTTOM_MONITOR}" '
+        BEGIN {
+            in_logical = 0
+            x = ""
+            y = ""
+            scale = ""
+            transform = "normal"
+        }
+        /^Logical monitors:/ {
+            in_logical = 1
+            next
+        }
+        in_logical && /Logical monitor #[0-9]+/ {
+            x = ""
+            y = ""
+            scale = ""
+            transform = "normal"
+            next
+        }
+        in_logical && /Position:/ {
+            pos = $0
+            sub(/^.*\(/, "", pos)
+            sub(/\).*$/, "", pos)
+            gsub(/[[:space:]]/, "", pos)
+            split(pos, coords, ",")
+            x = coords[1]
+            y = coords[2]
+            next
+        }
+        in_logical && /Scale:/ {
+            scale = $0
+            sub(/^.*Scale:[[:space:]]*/, "", scale)
+            next
+        }
+        in_logical && /Transform:/ {
+            transform = $0
+            sub(/^.*Transform:[[:space:]]*/, "", transform)
+            next
+        }
+        in_logical {
+            if ($0 ~ /\(/) {
+                line = $0
+                connector = ""
+                gsub(/[^A-Za-z0-9-]/, " ", line)
+                n = split(line, parts, /[[:space:]]+/)
+                for (i = 1; i <= n; i++) {
+                    if (parts[i] ~ /^[A-Za-z0-9]+-[A-Za-z0-9-]+$/) {
+                        connector = parts[i]
+                        break
+                    }
+                }
+                if (connector ~ /^[A-Za-z0-9]+-[A-Za-z0-9-]+$/ && connector != top && connector != bottom) {
+                    if (x == "") {
+                        x = 0
+                    }
+                    if (y == "") {
+                        y = 0
+                    }
+                    if (scale == "") {
+                        scale = 1
+                    }
+                    print connector "|" x "|" y "|" scale "|" transform
+                }
+            }
+        }
+    ')
+}
+
+function duo-build-external-args() {
+    EXTERNAL_ARGS=()
+    while IFS='|' read -r CONNECTOR X Y SCALE_VALUE TRANSFORM; do
+        if [ -z "${CONNECTOR}" ]; then
+            continue
+        fi
+        EXTERNAL_ARGS+=(--logical-monitor --scale "${SCALE_VALUE}" --transform "${TRANSFORM}" --x "${X}" --y "${Y}" --monitor "${CONNECTOR}")
+    done <<< "${EXTERNAL_LOGICAL_MONITORS}"
+}
+
+function duo-run-gdctl-command() {
+    local CMD_STR
+    CMD_STR=$(printf '%q ' "$@")
+    echo "$(date) - MONITOR - gdctl command: ${CMD_STR}"
+
+    if [ "${DUO_DRY_RUN}" = "1" ] || [ "${DUO_DRY_RUN}" = "true" ]; then
+        echo "$(date) - MONITOR - Dry-run enabled, skipping gdctl apply"
+        return 0
+    fi
+
+    "$@"
+}
+
+function duo-internal-unavailable() {
+    if [ "${INTERNAL_TOP_AVAILABLE}" = false ]; then
+        return 0
+    fi
+    return 1
+}
 function duo-set-status() {
     echo "
         BLUETOOTH_BEFORE=${BLUETOOTH_BEFORE}
         WIFI_BEFORE=${WIFI_BEFORE}
         KEYBOARD_ATTACHED=${KEYBOARD_ATTACHED}
         MONITOR_COUNT=${MONITOR_COUNT}
+        INTERNAL_ACTIVE_COUNT=${INTERNAL_ACTIVE_COUNT}
+        INTERNAL_TOP_AVAILABLE=${INTERNAL_TOP_AVAILABLE}
+        INTERNAL_BOTTOM_AVAILABLE=${INTERNAL_BOTTOM_AVAILABLE}
+        INTERNAL_TOP_ACTIVE=${INTERNAL_TOP_ACTIVE}
+        INTERNAL_BOTTOM_ACTIVE=${INTERNAL_BOTTOM_ACTIVE}
     " > /tmp/duo/status
 }
+duo-refresh-monitor-state
 duo-set-status
 
 function duo-set-kb-backlight() {
@@ -228,10 +400,11 @@ function duo-check-monitor() {
     if [ -n "$(lsusb | grep 'Zenbook Duo Keyboard')" ]; then
         KEYBOARD_ATTACHED=true
     fi
-    MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+    duo-refresh-monitor-state
     duo-set-status
     echo "$(date) - MONITOR - WIFI before: ${WIFI_BEFORE}, Bluetooth before: ${BLUETOOTH_BEFORE}"
     echo "$(date) - MONITOR - Keyboard attached: ${KEYBOARD_ATTACHED}, Monitor count: ${MONITOR_COUNT}"
+    echo "$(date) - MONITOR - Internal state: top available=${INTERNAL_TOP_AVAILABLE}, bottom available=${INTERNAL_BOTTOM_AVAILABLE}, top active=${INTERNAL_TOP_ACTIVE}, bottom active=${INTERNAL_BOTTOM_ACTIVE}"
     if [ ${KEYBOARD_ATTACHED} = true ]; then
         echo "$(date) - MONITOR - Keyboard attached"
         duo-set-kb-backlight ${DEFAULT_BACKLIGHT}
@@ -246,11 +419,18 @@ function duo-check-monitor() {
             echo "$(date) - MONITOR - Turning off Bluetooth"
             rfkill block bluetooth
         fi
-        if (( MONITOR_COUNT > 1 )) || (( MONITOR_COUNT == 0 )); then
+        if duo-internal-unavailable; then
+            echo "$(date) - MONITOR - Internal displays unavailable, skipping reconfiguration"
+            return
+        fi
+        if [ "${INTERNAL_TOP_ACTIVE}" != true ] || [ "${INTERNAL_BOTTOM_ACTIVE}" = true ]; then
             echo "$(date) - MONITOR - Disabling bottom monitor"
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1
-            NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
-            if ((${NEW_MONITOR_COUNT} == 1)); then
+            duo-build-external-args
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}")
+            COMMAND+=("${EXTERNAL_ARGS[@]}")
+            duo-run-gdctl-command "${COMMAND[@]}"
+            duo-refresh-monitor-state
+            if [ "${INTERNAL_TOP_ACTIVE}" = true ] && [ "${INTERNAL_BOTTOM_ACTIVE}" = false ]; then
                 MESSAGE="Disabled bottom display"
             else
                 MESSAGE="ERROR: Bottom display still on"
@@ -265,11 +445,18 @@ function duo-check-monitor() {
         fi
         echo "$(date) - MONITOR - Turning on Bluetooth"
         rfkill unblock bluetooth
-        if (( MONITOR_COUNT < 2 )); then
+        if duo-internal-unavailable; then
+            echo "$(date) - MONITOR - Internal displays unavailable, skipping reconfiguration"
+            return
+        fi
+        if [ "${INTERNAL_TOP_ACTIVE}" != true ] || [ "${INTERNAL_BOTTOM_ACTIVE}" != true ]; then
             echo "$(date) - MONITOR - Enabling bottom monitor"
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1
-            NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
-            if (( NEW_MONITOR_COUNT == 2 )); then
+            duo-build-external-args
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --logical-monitor --scale "${SCALE}" --monitor "${INTERNAL_BOTTOM_MONITOR}" --below "${INTERNAL_TOP_MONITOR}")
+            COMMAND+=("${EXTERNAL_ARGS[@]}")
+            duo-run-gdctl-command "${COMMAND[@]}"
+            duo-refresh-monitor-state
+            if [ "${INTERNAL_TOP_ACTIVE}" = true ] && [ "${INTERNAL_BOTTOM_ACTIVE}" = true ]; then
                 MESSAGE="Enabled bottom display"
             else
                 MESSAGE="ERROR: Bottom display still off"
@@ -299,42 +486,79 @@ function duo-cli() {
         duo-set-kb-backlight ${DEFAULT_BACKLIGHT}
         duo-check-monitor
     ;;
+    dry-run-check)
+        echo "$(date) - MONITOR - Dry-run check"
+        DUO_DRY_RUN=1
+        duo-check-monitor
+    ;;
     kbb)
         echo "$(date) - KEYBOARD - Backlight = ${2}"
         duo-set-kb-backlight ${2}
     ;;
     left-up)
         echo "$(date) - ROTATE - Left-up"
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90
-        else
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 --logical-monitor --scale ${SCALE} --monitor eDP-2 --left-of eDP-1 --transform 90
+        duo-refresh-monitor-state
+        if duo-internal-unavailable; then
+            echo "$(date) - ROTATE - Internal displays unavailable, skipping reconfiguration"
+            return
         fi
+        duo-build-external-args
+        if [ ${KEYBOARD_ATTACHED} = true ]; then
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 90)
+        else
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 90 --logical-monitor --scale "${SCALE}" --monitor "${INTERNAL_BOTTOM_MONITOR}" --left-of "${INTERNAL_TOP_MONITOR}" --transform 90)
+        fi
+        COMMAND+=("${EXTERNAL_ARGS[@]}")
+        duo-run-gdctl-command "${COMMAND[@]}"
 
         ;;
     right-up)
         echo "$(date) - ROTATE - Right-up"
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270
-        else
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 --logical-monitor --scale ${SCALE} --monitor eDP-2 --right-of eDP-1 --transform 270
+        duo-refresh-monitor-state
+        if duo-internal-unavailable; then
+            echo "$(date) - ROTATE - Internal displays unavailable, skipping reconfiguration"
+            return
         fi
+        duo-build-external-args
+        if [ ${KEYBOARD_ATTACHED} = true ]; then
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 270)
+        else
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 270 --logical-monitor --scale "${SCALE}" --monitor "${INTERNAL_BOTTOM_MONITOR}" --right-of "${INTERNAL_TOP_MONITOR}" --transform 270)
+        fi
+        COMMAND+=("${EXTERNAL_ARGS[@]}")
+        duo-run-gdctl-command "${COMMAND[@]}"
         ;;
     bottom-up)
         echo "$(date) - ROTATE - Bottom-up"
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180
-        else
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 --logical-monitor --scale ${SCALE} --monitor eDP-2 --above eDP-1 --transform 180
+        duo-refresh-monitor-state
+        if duo-internal-unavailable; then
+            echo "$(date) - ROTATE - Internal displays unavailable, skipping reconfiguration"
+            return
         fi
+        duo-build-external-args
+        if [ ${KEYBOARD_ATTACHED} = true ]; then
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 180)
+        else
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --transform 180 --logical-monitor --scale "${SCALE}" --monitor "${INTERNAL_BOTTOM_MONITOR}" --above "${INTERNAL_TOP_MONITOR}" --transform 180)
+        fi
+        COMMAND+=("${EXTERNAL_ARGS[@]}")
+        duo-run-gdctl-command "${COMMAND[@]}"
         ;;
     normal)
         echo "$(date) - ROTATE - Normal"
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1
-        else
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1
+        duo-refresh-monitor-state
+        if duo-internal-unavailable; then
+            echo "$(date) - ROTATE - Internal displays unavailable, skipping reconfiguration"
+            return
         fi
+        duo-build-external-args
+        if [ ${KEYBOARD_ATTACHED} = true ]; then
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}")
+        else
+            COMMAND=(gdctl set --logical-monitor --primary --scale "${SCALE}" --monitor "${INTERNAL_TOP_MONITOR}" --logical-monitor --scale "${SCALE}" --monitor "${INTERNAL_BOTTOM_MONITOR}" --below "${INTERNAL_TOP_MONITOR}")
+        fi
+        COMMAND+=("${EXTERNAL_ARGS[@]}")
+        duo-run-gdctl-command "${COMMAND[@]}"
         ;;
     *)
         echo "$(date) - UNKNOWN - $@"
