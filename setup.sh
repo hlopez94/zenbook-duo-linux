@@ -22,10 +22,19 @@ if [ "${DEV_MODE}" = false ]; then
         mutter-common-bin \
         iio-sensor-proxy \
         python3-usb \
+        python3-evdev \
         dconf-cli
     sudo mkdir -p /usr/local/bin
     sudo cp ./duo.sh ${INSTALL_LOCATION}
+    sudo cp ./duo_fn_bridge.sh /usr/local/bin/duo_fn_bridge.sh
+    sudo cp ./duo_fn_bridge.py /usr/local/bin/duo_fn_bridge.py
+    if [ ! -f /etc/default/zenbook-duo-fn-bridge.conf ]; then
+        sudo cp ./duo_fn_bridge.conf /etc/default/zenbook-duo-fn-bridge.conf
+    fi
     sudo chmod a+x ${INSTALL_LOCATION}
+    sudo chmod a+x /usr/local/bin/duo_fn_bridge.sh
+    sudo chmod a+x /usr/local/bin/duo_fn_bridge.py
+    sudo chmod 0644 /etc/default/zenbook-duo-fn-bridge.conf
     sudo sed -i "s/DEFAULT_BACKLIGHT=1/DEFAULT_BACKLIGHT=${DEFAULT_BACKLIGHT}/g" ${INSTALL_LOCATION}
     sudo sed -i "s/DEFAULT_SCALE=1/DEFAULT_SCALE=${DEFAULT_SCALE}/g" ${INSTALL_LOCATION}
 fi
@@ -75,10 +84,24 @@ Restart=no
 WantedBy=default.target
 " | sudo tee /etc/systemd/user/zenbook-duo-user.service
 
-sudo systemctl daemon-reexec
+echo "[Unit]
+Description=Zenbook Duo FN Bridge (ABS_MISC -> KEY_*)
+After=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/duo_fn_bridge.sh
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+" | sudo tee /etc/systemd/system/zenbook-duo-fn-bridge.service
+
 sudo systemctl daemon-reload
 sudo systemctl enable zenbook-duo.service
-systemctl --user daemon-reexec
+sudo systemctl enable zenbook-duo-fn-bridge.service
+sudo systemctl start --no-block zenbook-duo-fn-bridge.service || true
 systemctl --user daemon-reload
 sudo systemctl --global enable zenbook-duo-user.service
 
