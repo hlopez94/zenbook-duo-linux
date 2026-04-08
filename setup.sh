@@ -82,4 +82,15 @@ systemctl --user daemon-reexec
 systemctl --user daemon-reload
 sudo systemctl --global enable zenbook-duo-user.service
 
+if [ "${XDG_CURRENT_DESKTOP}" = "GNOME" ] || [ "${DESKTOP_SESSION}" = "gnome" ] || command -v gnome-shell &>/dev/null; then
+    echo "GNOME detected. Configuring touchscreen gesture mapping..."
+    dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
+    dconf write "/org/gnome/desktop/peripherals/touchscreens/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
+    dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4447/output" "['SDC', '0x419d', '0x00000000', 'eDP-1']"
+    dconf write "/org/gnome/desktop/peripherals/tablets/04f3:4448/output" "['SDC', '0x419d', '0x00000000', 'eDP-2']"
+    echo "Gesture and pen mapping configured: digitizer on main screen -> eDP-1, digitizer on second screen -> eDP-2."
+else
+    echo "Non-GNOME desktop detected. Skipping gesture mapping configuration."
+fi
+
 echo "Install complete."
